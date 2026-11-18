@@ -1,0 +1,4 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="punch_accessibility_desc">WeComLoc 自动打卡服务：用于在设定的打卡时间范围内自动完成打卡操作。</string>
+</resources>

@@ -170,6 +170,17 @@ public class MainActivity extends Activity {
             @Override public void onClick(View v) { openWeCom(); }
         });
 
+
+        Button punch = new Button(this);
+        punch.setText("定时打卡");
+        punch.setAllCaps(false);
+        punch.setTextSize(15);
+        root.addView(punch, lp(-1, dp(44), 0, 12));
+        punch.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                startActivity(new Intent(MainActivity.this, AutoPunchActivity.class));
+            }
+        });
         status = new TextView(this);
         status.setTextSize(13);
         status.setTextColor(Color.rgb(46, 125, 50));

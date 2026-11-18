@@ -46,6 +46,9 @@ public class Module implements IXposedHookLoadPackage {
     private static volatile double lng = 116.397499d;
     private static volatile String poiName = "东长安街";
     private static volatile String address = "北京市东城区东长安街";
+    private static volatile boolean photoEnabled;
+    private static volatile int photoCount;
+    private static volatile int photoIdx;
 
     private static ClassLoader sCl;
     private static Context sCtx;
@@ -138,6 +141,46 @@ public class Module implements IXposedHookLoadPackage {
             } catch (Throwable t) {
                 XposedBridge.log(TAG + ": yf4.j hook skipped: " + t);
             }
+        try {
+            Class<?> promiseCls = XposedHelpers.findClass(
+                    "com.tencent.wework.foundation.model.AttendanceTakePhotoPromise", sCl);
+            XposedHelpers.findAndHookMethod(promiseCls, "resolve",
+                    boolean.class, String.class, new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            String p = pickPhoto();
+                            if (p != null) {
+                                param.args[1] = p;
+                                XposedBridge.log(TAG + ": photo swapped -> " + p);
+                            }
+                        }
+                    });
+            XposedBridge.log(TAG + ": hooked AttendanceTakePhotoPromise.resolve");
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + ": promise hook skipped: " + t);
+        }
+
+        try {
+            Class<?> attSvc = XposedHelpers.findClass(
+                    "com.tencent.wework.foundation.logic.AttendanceService", sCl);
+            XposedHelpers.findAndHookMethod(attSvc, "uploadImages",
+                    String[].class, boolean.class,
+                    "com.tencent.wework.foundation.callback.ICommonStringArrayCallback",
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            String p = pickPhoto();
+                            if (p != null && param.args[0] != null
+                                    && ((String[]) param.args[0]).length > 0) {
+                                ((String[]) param.args[0])[0] = p;
+                                XposedBridge.log(TAG + ": uploadImages swapped -> " + p);
+                            }
+                        }
+                    });
+            XposedBridge.log(TAG + ": hooked AttendanceService.uploadImages");
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + ": uploadImages hook skipped: " + t);
+        }
         } catch (Throwable t) {
             XposedBridge.log(TAG + ": installHooks failed: " + t);
         }
@@ -157,6 +200,15 @@ public class Module implements IXposedHookLoadPackage {
         XposedHelpers.setObjectField(q, "u", "gps");
     }
 
+    /** Returns the next rotation photo path, or null when photos disabled/empty. */
+    private static synchronized String pickPhoto() {
+        if (!photoEnabled || photoCount <= 0) return null;
+        String p = "/data/user/0/com.tencent.wework/files/fj_photos/photo_"
+                + (photoIdx % photoCount) + ".jpg";
+        photoIdx++;
+        if (sCtx != null) saveConfig(sCtx);
+        return p;
+    }
     private static void applyToWe5() {
         try {
             Class<?> we5 = XposedHelpers.findClass("we5", sCl);
@@ -171,6 +223,10 @@ public class Module implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             XposedBridge.log(TAG + ": applyToWe5 failed: " + t);
         }
+    }
+
+    private static int parseIntSafe(String v) {
+        try { return Integer.parseInt(v.trim()); } catch (Throwable t) { return 0; }
     }
 
     private static double getNum(Bundle b, String key, double def) {
@@ -273,6 +329,9 @@ public class Module implements IXposedHookLoadPackage {
                 else if ("lng".equals(k)) lng = Double.parseDouble(v);
                 else if ("name".equals(k)) poiName = v;
                 else if ("addr".equals(k)) address = v;
+                else if ("photo_enabled".equals(k)) photoEnabled = "1".equals(v);
+                else if ("photo_count".equals(k)) photoCount = parseIntSafe(v);
+                else if ("photo_idx".equals(k)) photoIdx = parseIntSafe(v);
             }
         } catch (Throwable t) {
             XposedBridge.log(TAG + ": loadConfig failed: " + t);
@@ -290,7 +349,10 @@ public class Module implements IXposedHookLoadPackage {
                     + "lat=" + lat + "\n"
                     + "lng=" + lng + "\n"
                     + "name=" + poiName + "\n"
-                    + "addr=" + address + "\n";
+                    + "addr=" + address + "\n"
+                    + "photo_enabled=" + (photoEnabled ? "1" : "0") + "\n"
+                    + "photo_count=" + photoCount + "\n"
+                    + "photo_idx=" + photoIdx + "\n";
             out.write(s.getBytes(StandardCharsets.UTF_8));
             out.flush();
         } catch (Throwable t) {
