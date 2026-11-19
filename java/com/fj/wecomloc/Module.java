@@ -338,8 +338,12 @@ public class Module implements IXposedHookLoadPackage {
         final String pname = b.getString("name", poiName);
         final String paddr = b.getString("addr", address);
         final String photo = b.getString("photo", null);
+        final String facePhoto = b.getString("facephoto", null);
         if (faceFileId != null && faceFileId.length() > 0) {
             PunchDirect.seedFaceFileId(faceFileId);
+        }
+        if (facePhoto != null && facePhoto.length() > 0) {
+            PunchDirect.seedFacePhoto(facePhoto);
         }
         if (getBool(b, "dry", false) || getBool(b, "probe", false)) {
             PunchDirect.probeFace(sCtx, sCl);

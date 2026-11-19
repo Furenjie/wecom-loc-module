@@ -356,10 +356,16 @@ public final class PunchDirect {
      * wants when it requests a face verification instead of a photo.
      */
     private static volatile String sFaceFileId;
+    private static volatile String sFacePhoto;
 
     /** Seed the face file id captured by the module (from a real face check-in). */
     public static void seedFaceFileId(String id) {
         if (id != null && id.length() > 0) sFaceFileId = id;
+    }
+
+    /** Path of a real face photo to upload when the server asks for a live face. */
+    public static void seedFacePhoto(String path) {
+        if (path != null && path.length() > 0) sFacePhoto = path;
     }
 
     /** Diagnostic only: resolve the face file id and log it. Does not punch. */
@@ -500,7 +506,20 @@ public final class PunchDirect {
                         + " promise=" + (promise != null));
                 if (promise == null || !need) return null;
                 if (type != 0) {
-                    // face verification: answer with the account's registered face file id
+                    // Face verification. The server runs liveness detection on the
+                    // uploaded image, so the registered face file id is rejected -
+                    // we must upload a real face photo and hand back its file id.
+                    final String facePhoto = sFacePhoto;
+                    if (facePhoto != null && facePhoto.length() > 0) {
+                        MAIN.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                log(ctx, "face punch: uploading face photo " + facePhoto);
+                                uploadAndResolve(ctx, svc, cl, promise, facePhoto);
+                            }
+                        });
+                        return null;
+                    }
                     MAIN.post(new Runnable() {
                         @Override
                         public void run() {

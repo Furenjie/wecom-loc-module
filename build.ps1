@@ -21,9 +21,16 @@ if (-not (Test-Path (Join-Path $build 'classes\com\fj\wecomloc\Module.class'))) 
 }
 
 Write-Host '[2/5] d8'
-$classes = Get-ChildItem (Join-Path $build 'classes') -Recurse -Filter *.class | Select-Object -ExpandProperty FullName
-& (Join-Path $bt 'd8.bat') --min-api 24 --lib $platform --output (Join-Path $build 'dex') $classes 2>&1 | Out-Host
-if (-not (Test-Path (Join-Path $build 'dex\classes.dex'))) { throw 'd8 failed' }
+# d8.bat explodes once the class list exceeds the cmd line limit, so pack the
+# classes into a zip first and feed d8 a single input.
+$dexOut = Join-Path $build 'dex'
+if (Test-Path (Join-Path $dexOut 'classes.dex')) { Remove-Item (Join-Path $dexOut 'classes.dex') -Force }
+$classZip = Join-Path $build 'classes.zip'
+if (Test-Path $classZip) { Remove-Item $classZip -Force }
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::CreateFromDirectory((Join-Path $build 'classes'), $classZip)
+& (Join-Path $bt 'd8.bat') --min-api 24 --lib $platform --output $dexOut $classZip 2>&1 | Out-Host
+if (-not (Test-Path (Join-Path $dexOut 'classes.dex'))) { throw 'd8 failed' }
 
 Write-Host '[3/5] aapt2 compile/link'
 $resZip = Join-Path $build 'res.zip'
