@@ -156,8 +156,7 @@ public class AutoPunchActivity extends Activity {
         Button clear = new Button(this);
         clear.setText("清空照片");
         clear.setOnClickListener(v -> {
-            File[] old = PunchStore.photos(this);
-            if (old != null) for (File f : old) f.delete();
+            MediaPool.clear(this, MediaPool.DIR_PHOTO, "photo");
             updatePhotoInfo();
         });
         root.addView(clear);
@@ -188,8 +187,7 @@ public class AutoPunchActivity extends Activity {
         Button clearFace = new Button(this);
         clearFace.setText("清空人脸照片");
         clearFace.setOnClickListener(v -> {
-            File[] old = PunchStore.faces(this);
-            if (old != null) for (File f : old) f.delete();
+            MediaPool.clear(this, MediaPool.DIR_FACE, "face");
             updateFaceInfo();
         });
         root.addView(clearFace);
@@ -447,12 +445,18 @@ public class AutoPunchActivity extends Activity {
 
     private void updatePhotoInfo() {
         File[] fs = PunchStore.photos(this);
-        mPhotoInfo.setText("已选照片：" + (fs == null ? 0 : fs.length));
+        int n = fs == null ? 0 : fs.length;
+        mPhotoInfo.setText(n > 0
+                ? "已选照片：" + n + " 张（" + fs[0].getParent() + "）"
+                : "已选照片：0 张（" + MediaPool.dir(MediaPool.DIR_PHOTO) + "）");
     }
 
     private void updateFaceInfo() {
         File[] fs = PunchStore.faces(this);
-        mFaceInfo.setText("已选人脸照片：" + (fs == null ? 0 : fs.length));
+        int n = fs == null ? 0 : fs.length;
+        mFaceInfo.setText(n > 0
+                ? "已选人脸照片：" + n + " 张（" + fs[0].getParent() + "）"
+                : "已选人脸照片：0 张（" + MediaPool.dir(MediaPool.DIR_FACE) + "）");
     }
 
     // --------------------------------------------------------------- picking
@@ -474,16 +478,16 @@ public class AutoPunchActivity extends Activity {
         }
 
         boolean face = requestCode == REQ_FACES;
-        File dir = face ? PunchStore.faceDir(this) : PunchStore.photoDir(this);
-        dir.mkdirs();
-        File[] old = face ? PunchStore.faces(this) : PunchStore.photos(this);
-        if (old != null) for (File f : old) f.delete();
-
+        String subDir = face ? MediaPool.DIR_FACE : MediaPool.DIR_PHOTO;
         String prefix = face ? "face_" : "photo_";
+        MediaPool.clear(this, subDir, prefix);
+
         int n = 0;
         for (Uri u : uris) {
-            File out = new File(dir, prefix + n + ".jpg");
-            if (saveScaled(u, out)) n++;
+            Bitmap bm = loadScaled(u);
+            if (bm == null) continue;
+            if (MediaPool.insert(this, bm, subDir, prefix + n + ".jpg") != null) n++;
+            bm.recycle();
         }
         Toast.makeText(this, "已保存 " + n, Toast.LENGTH_SHORT).show();
         if (face) {
@@ -493,7 +497,8 @@ public class AutoPunchActivity extends Activity {
         }
     }
 
-    private boolean saveScaled(Uri u, File out) {
+    /** Decodes {@code u} downsampled to LONG_EDGE; caller recycles the bitmap. */
+    private Bitmap loadScaled(Uri u) {
         InputStream in = null;
         try {
             BitmapFactory.Options bounds = new BitmapFactory.Options();
@@ -511,14 +516,9 @@ public class AutoPunchActivity extends Activity {
             in = getContentResolver().openInputStream(u);
             Bitmap bm = BitmapFactory.decodeStream(in, null, opts);
             if (in != null) in.close();
-            if (bm == null) return false;
-
-            FileOutputStream fo = new FileOutputStream(out);
-            bm.compress(Bitmap.CompressFormat.JPEG, JPEG_Q, fo);
-            fo.close();
-            return true;
+            return bm;
         } catch (Throwable t) {
-            return false;
+            return null;
         }
     }
 }

@@ -4,7 +4,6 @@ import android.content.Context;
 import android.content.SharedPreferences;
 
 import java.io.File;
-import java.util.Arrays;
 
 /** Schedule + photo config for auto punch. */
 final class PunchStore {
@@ -105,19 +104,16 @@ final class PunchStore {
     }
 
     /**
-     * Photo pool lives in /sdcard/Pictures/wecom_punch.
+     * Photo pool lives in Pictures/wecom_punch, written through MediaStore.
      *
      * <p>Not getExternalFilesDir(): Android's scoped storage hides one app's
      * Android/data from every other app, so the WeCom process could not read the
      * pictures to copy them into its own private dir (the check-in then failed
-     * with error 901). A shared media dir is readable by everyone.
+     * with error 901). A shared media dir is readable by everyone. Writing there
+     * needs MediaStore - a plain FileOutputStream is refused on Android 11+.
      */
     static File photoDir(Context c) {
-        File d = new File("/sdcard/Pictures/wecom_punch");
-        if (!d.exists()) {
-            d.mkdirs();
-        }
-        return d;
+        return MediaPool.dir(MediaPool.DIR_PHOTO);
     }
 
     static int photoCount(Context c) {
@@ -125,40 +121,18 @@ final class PunchStore {
     }
 
     static File[] photos(Context c) {
-        return list("photo", photoDir(c));
+        return MediaPool.list(c, MediaPool.DIR_PHOTO, "photo");
     }
 
     // -------------------------------------------------------------- face pool
 
     /** Real face photos used to answer the server's liveness challenge. */
     static File faceDir(Context c) {
-        File d = new File("/sdcard/Pictures/wecom_punch_face");
-        if (!d.exists()) {
-            d.mkdirs();
-        }
-        return d;
+        return MediaPool.dir(MediaPool.DIR_FACE);
     }
 
     static File[] faces(Context c) {
-        return list("face", faceDir(c));
-    }
-
-    /** Only *.jpg picked up, so leftover thumbnails or .nomedia do not break rotation. */
-    private static File[] list(String prefix, File dir) {
-        File[] fs = dir.listFiles();
-        if (fs == null) {
-            return new File[0];
-        }
-        java.util.ArrayList<File> out = new java.util.ArrayList<File>();
-        for (File f : fs) {
-            String n = f.getName();
-            if (f.isFile() && n.startsWith(prefix) && n.endsWith(".jpg")) {
-                out.add(f);
-            }
-        }
-        File[] arr = out.toArray(new File[0]);
-        Arrays.sort(arr);
-        return arr;
+        return MediaPool.list(c, MediaPool.DIR_FACE, "face");
     }
 
     static int faceCount(Context c) {
