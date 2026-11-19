@@ -262,8 +262,7 @@ public class AutoPunchActivity extends Activity {
                 String msg = intent.getStringExtra("msg");
                 Toast.makeText(AutoPunchActivity.this,
                         msg == null ? "" : msg, Toast.LENGTH_SHORT).show();
-                mLog.setText(readLog());
-            }
+                mLog.setText(readLog());            }
         };
         IntentFilter f = new IntentFilter(ACTION_RESULT);
         if (Build.VERSION.SDK_INT >= 33) {

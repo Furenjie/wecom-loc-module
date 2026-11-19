@@ -471,21 +471,33 @@ public final class PunchDirect {
                 try {
                     svc = getService(cl);
                 } catch (Throwable t) {
-                    report(ctx, "probe: service unavailable: " + t);
+                    report(ctx, "链路诊断: 取不到打卡服务(" + root(t) + ")");
                     return;
                 }
                 if (svc == null) {
-                    report(ctx, "probe: service null");
+                    report(ctx, "链路诊断: 打卡服务尚未初始化");
                     return;
                 }
+                report(ctx, "链路诊断: 打卡服务已就绪");
                 resolveFaceFileId(ctx, svc, cl, new FaceReady() {
                     @Override
                     public void onReady(String fileId) {
-                        report(ctx, "probe face file id = " + fileId);
+                        report(ctx, "链路诊断: 人脸 fileid=" + (fileId == null ? "(暂无)" : fileId));
                     }
                 });
             }
         });
+    }
+
+    /** Unwrap reflection wrappers so the log shows the real reason. */
+    private static String root(Throwable t) {
+        Throwable c = t;
+        while (c.getCause() != null && c.getCause() != c) {
+            c = c.getCause();
+        }
+        String s = c.getClass().getSimpleName();
+        String m = c.getMessage();
+        return m == null ? s : s + ": " + m;
     }
 
     /** Resolve the face file id via AttendanceService.getUserFace([vid], corpid, true, cb). */

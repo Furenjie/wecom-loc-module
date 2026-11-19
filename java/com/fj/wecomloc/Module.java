@@ -55,6 +55,8 @@ public class Module implements IXposedHookLoadPackage {
 
     private static ClassLoader sCl;
     private static Context sCtx;
+    /** name of the process we are running in; the punch only runs in the main one */
+    private static String sProcName = "";
     private static boolean sInited;
     private static boolean sHooksInstalled;
     private static BroadcastReceiver sReceiver;
@@ -63,6 +65,7 @@ public class Module implements IXposedHookLoadPackage {
     public void handleLoadPackage(LoadPackageParam lpparam) {
         if (!PKG.equals(lpparam.packageName)) return;
         sCl = lpparam.classLoader;
+        sProcName = lpparam.processName == null ? "" : lpparam.processName;
         XposedBridge.log(TAG + ": loaded in " + lpparam.processName);
 
         try {
@@ -330,6 +333,12 @@ public class Module implements IXposedHookLoadPackage {
      * attendance entry point, no UI involved.
      */
     private static void handlePunch(Intent intent) {
+        // WeCom runs one process per feature (:push, :wemeet, :wxa_container0 ...).
+        // LSPosed injects us into all of them, so a single broadcast would be
+        // handled four times and three of those have no AttendanceService ->
+        // three identical "service unavailable" failures. Only the main process
+        // owns the attendance stack, so everyone else stays silent.
+        if (sProcName != null && sProcName.indexOf(':') >= 0) return;
         Bundle b = intent.getExtras();
         if (b == null) b = new Bundle();
         final boolean outside = getBool(b, "outside", true);
