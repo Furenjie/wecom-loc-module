@@ -52,6 +52,7 @@ public class AutoPunchActivity extends Activity {
 
     private TextView mMorningTime;
     private TextView mEveningTime;
+    private TextView mOutsideTime;
     private TextView mPhotoInfo;
     private TextView mLog;
     private final Handler mUi = new Handler(Looper.getMainLooper());
@@ -81,10 +82,21 @@ public class AutoPunchActivity extends Activity {
         root.addView(hint);
 
         Switch outside = new Switch(this);
-        outside.setText("外出打卡（关闭则打上下班卡）");
-        outside.setChecked(outsideEnabled());
-        outside.setOnCheckedChangeListener((b, v) -> setOutside(v));
+        outside.setText("外出打卡（自动）");
+        outside.setChecked(PunchStore.outsideEnabled(this));
+        outside.setOnCheckedChangeListener((b, v) -> {
+            PunchStore.setOutside(this, v,
+                    PunchStore.outsideStart(this), PunchStore.outsideEnd(this));
+            if (v) PunchScheduler.scheduleNext(this, "outside");
+            else PunchScheduler.cancel(this, "outside");
+            updateOutsideText();
+        });
         root.addView(outside);
+
+        mOutsideTime = new TextView(this);
+        updateOutsideText();
+        mOutsideTime.setOnClickListener(v -> pickTime(2));
+        root.addView(mOutsideTime);
 
         Switch morning = new Switch(this);
         morning.setText("上班打卡（自动）");
@@ -99,7 +111,7 @@ public class AutoPunchActivity extends Activity {
 
         mMorningTime = new TextView(this);
         updateMorningText();
-        mMorningTime.setOnClickListener(v -> pickTime(true));
+        mMorningTime.setOnClickListener(v -> pickTime(0));
         root.addView(mMorningTime);
 
         Switch evening = new Switch(this);
@@ -115,7 +127,7 @@ public class AutoPunchActivity extends Activity {
 
         mEveningTime = new TextView(this);
         updateEveningText();
-        mEveningTime.setOnClickListener(v -> pickTime(false));
+        mEveningTime.setOnClickListener(v -> pickTime(1));
         root.addView(mEveningTime);
 
         Switch photoSw = new Switch(this);
@@ -152,6 +164,20 @@ public class AutoPunchActivity extends Activity {
         test.setText("立即测试：直投打卡");
         test.setOnClickListener(v -> testPunch());
         root.addView(test);
+
+        Button sched = new Button(this);
+        sched.setText("测试定时链路（10秒后触发，仅验证不提交）");
+        sched.setOnClickListener(v -> {
+            Intent i = new Intent(this, AlarmReceiver.class);
+            i.setAction(AlarmReceiver.ACTION_TEST_SCHEDULE);
+            i.putExtra("delay", 10);
+            i.putExtra("outside", outsideEnabled());
+            i.putExtra("dry", true);
+            sendBroadcast(i);
+            Toast.makeText(this, "已排定 10 秒后触发（dry），等 20 秒看日志", Toast.LENGTH_SHORT).show();
+            mUi.postDelayed(() -> mLog.setText(readLog()), 20000);
+        });
+        root.addView(sched);
 
         Button openWecom = new Button(this);
         openWecom.setText("打开企业微信");
@@ -265,7 +291,8 @@ public class AutoPunchActivity extends Activity {
 
         Intent i = new Intent(ACTION_PUNCH_DIRECT);
         i.setPackage("com.tencent.wework");
-        i.putExtra("outside", outsideEnabled());
+        // 测试按钮固定打「外出打卡」，不碰上下班卡
+        i.putExtra("outside", "manual".equals(type) ? true : outsideEnabled());
         i.putExtra("lat", lat);
         i.putExtra("lng", lng);
         i.putExtra("name", name);
@@ -279,11 +306,7 @@ public class AutoPunchActivity extends Activity {
     }
 
     private boolean outsideEnabled() {
-        return getSharedPreferences("ui", MODE_PRIVATE).getBoolean("outside", true);
-    }
-
-    private void setOutside(boolean v) {
-        getSharedPreferences("ui", MODE_PRIVATE).edit().putBoolean("outside", v).apply();
+        return PunchStore.outsideEnabled(this);
     }
 
     private static double parseD(String s, double def) {
@@ -332,9 +355,11 @@ public class AutoPunchActivity extends Activity {
 
     // ------------------------------------------------------------------ time
 
-    private void pickTime(boolean morning) {
-        int cur = morning ? PunchStore.morningStart(this) : PunchStore.eveningStart(this);
-        int curEnd = morning ? PunchStore.morningEnd(this) : PunchStore.eveningEnd(this);
+    private void pickTime(int which) {
+        int cur = which == 0 ? PunchStore.morningStart(this)
+                : which == 1 ? PunchStore.eveningStart(this) : PunchStore.outsideStart(this);
+        int curEnd = which == 0 ? PunchStore.morningEnd(this)
+                : which == 1 ? PunchStore.eveningEnd(this) : PunchStore.outsideEnd(this);
         new TimePickerDialog(this, (tp, h, m) -> {
             final int start = h * 60 + m;
             new TimePickerDialog(this, (tp2, h2, m2) -> {
@@ -343,16 +368,28 @@ public class AutoPunchActivity extends Activity {
                     Toast.makeText(this, "结束时间必须晚于开始时间", Toast.LENGTH_SHORT).show();
                     return;
                 }
-                if (morning) {
+                if (which == 0) {
                     PunchStore.setMorning(this, PunchStore.morningEnabled(this), start, end);
-                } else {
+                    PunchScheduler.scheduleNext(this, "morning");
+                } else if (which == 1) {
                     PunchStore.setEvening(this, PunchStore.eveningEnabled(this), start, end);
+                    PunchScheduler.scheduleNext(this, "evening");
+                } else {
+                    PunchStore.setOutside(this, PunchStore.outsideEnabled(this), start, end);
+                    PunchScheduler.scheduleNext(this, "outside");
                 }
-                PunchScheduler.scheduleNext(this, morning ? "morning" : "evening");
                 updateMorningText();
                 updateEveningText();
+                updateOutsideText();
             }, curEnd / 60, curEnd % 60, true).show();
         }, cur / 60, cur % 60, true).show();
+    }
+
+    private void updateOutsideText() {
+        mOutsideTime.setText("外出窗口："
+                + PunchScheduler.fmt(PunchStore.outsideStart(this)) + " ~ "
+                + PunchScheduler.fmt(PunchStore.outsideEnd(this))
+                + "   下次=" + PunchScheduler.fmt(PunchStore.lastScheduled(this, "outside")));
     }
 
     private void updateMorningText() {

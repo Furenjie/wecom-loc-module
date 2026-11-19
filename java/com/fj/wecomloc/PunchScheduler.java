@@ -23,7 +23,7 @@ final class PunchScheduler {
     private PunchScheduler() {
     }
 
-    /** Schedule the next occurrence for "morning" or "evening". Returns fire minute-of-day. */
+    /** Schedule the next occurrence for "morning" / "evening" / "outside". */
     static int scheduleNext(Context c, String type) {
         boolean en;
         int start;
@@ -32,6 +32,10 @@ final class PunchScheduler {
             en = PunchStore.morningEnabled(c);
             start = PunchStore.morningStart(c);
             end = PunchStore.morningEnd(c);
+        } else if ("outside".equals(type)) {
+            en = PunchStore.outsideEnabled(c);
+            start = PunchStore.outsideStart(c);
+            end = PunchStore.outsideEnd(c);
         } else {
             en = PunchStore.eveningEnabled(c);
             start = PunchStore.eveningStart(c);
@@ -64,6 +68,7 @@ final class PunchScheduler {
     static void scheduleAll(Context c) {
         if (PunchStore.morningEnabled(c)) scheduleNext(c, "morning");
         if (PunchStore.eveningEnabled(c)) scheduleNext(c, "evening");
+        if (PunchStore.outsideEnabled(c)) scheduleNext(c, "outside");
     }
 
     static void cancel(Context c, String type) {
@@ -76,7 +81,7 @@ final class PunchScheduler {
         Intent i = new Intent(c, AlarmReceiver.class);
         i.setAction(ACTION_PUNCH);
         i.putExtra("type", type);
-        int req = "morning".equals(type) ? 9001 : 9002;
+        int req = "morning".equals(type) ? 9001 : ("outside".equals(type) ? 9003 : 9002);
         return PendingIntent.getBroadcast(c, req, i,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }

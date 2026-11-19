@@ -38,6 +38,24 @@ final class PunchStore {
         return sp(c).getInt("evening_end", 18 * 60 + 30);
     }
 
+    /** 外出打卡窗口：走 remoteCheckExceptionRamdon_V2815（可带照片/人脸）。 */
+    static boolean outsideEnabled(Context c) {
+        return sp(c).getBoolean("outside_enabled", false);
+    }
+
+    static int outsideStart(Context c) {
+        return sp(c).getInt("outside_start", 9 * 60);
+    }
+
+    static int outsideEnd(Context c) {
+        return sp(c).getInt("outside_end", 18 * 60);
+    }
+
+    static void setOutside(Context c, boolean en, int start, int end) {
+        sp(c).edit().putBoolean("outside_enabled", en)
+                .putInt("outside_start", start).putInt("outside_end", end).apply();
+    }
+
     static String pin(Context c) {
         return sp(c).getString("pin", "");
     }

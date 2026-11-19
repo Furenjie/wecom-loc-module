@@ -58,6 +58,9 @@ public final class PunchDirect {
     private static final String STRARR = "com.tencent.wework.foundation.callback.ICommonStringArrayCallback";
     private static final String NEXT = SVC + "$IGetNextCheckinStateCallback";
     private static final String PROMISE = "com.tencent.wework.foundation.model.AttendanceTakePhotoPromise";
+    private static final String STRCB = "com.tencent.wework.foundation.callback.ICommonStringCallback";
+    private static final String IACCT = "com.tencent.wework.login.api.IAccount";
+    private static final String FACEINFO = "com.tencent.wework.foundation.model.pb.WwAttendanceFaceRecg$UserFaceInfo";
 
     private PunchDirect() {
     }
@@ -345,6 +348,139 @@ public final class PunchDirect {
         }
     }
 
+    // ------------------------------------------------------------------ face
+
+    /**
+     * Cache of the account's registered face file id. WeCom asks the backend for
+     * {@code "vid:fileid,vid:fileid"}; the fileid is what the native check-in
+     * wants when it requests a face verification instead of a photo.
+     */
+    private static volatile String sFaceFileId;
+
+    /** Seed the face file id captured by the module (from a real face check-in). */
+    public static void seedFaceFileId(String id) {
+        if (id != null && id.length() > 0) sFaceFileId = id;
+    }
+
+    /** Diagnostic only: resolve the face file id and log it. Does not punch. */
+    public static void probeFace(final Context ctx, final ClassLoader cl) {
+        MAIN.post(new Runnable() {
+            @Override
+            public void run() {
+                Object svc;
+                try {
+                    svc = getService(cl);
+                } catch (Throwable t) {
+                    report(ctx, "probe: service unavailable: " + t);
+                    return;
+                }
+                if (svc == null) {
+                    report(ctx, "probe: service null");
+                    return;
+                }
+                resolveFaceFileId(ctx, svc, cl, new FaceReady() {
+                    @Override
+                    public void onReady(String fileId) {
+                        report(ctx, "probe face file id = " + fileId);
+                    }
+                });
+            }
+        });
+    }
+
+    /** Resolve the face file id via AttendanceService.getUserFace([vid], corpid, true, cb). */
+    private static void resolveFaceFileId(final Context ctx, final Object svc,
+                                          final ClassLoader cl,
+                                          final FaceReady then) {
+        if (sFaceFileId != null && sFaceFileId.length() > 0) {
+            then.onReady(sFaceFileId);
+            return;
+        }
+        long vid = 0L;
+        long corpId = 0L;
+        try {
+            Class<?> acct = Class.forName(IACCT, true, cl);
+            Object a = acct.getMethod("get").invoke(null);
+            vid = ((Number) acct.getMethod("getVid").invoke(a)).longValue();
+            corpId = ((Number) acct.getMethod("getCorpId").invoke(a)).longValue();
+            if (vid == 0L) {
+                vid = ((Number) acct.getMethod("getLoginUserId").invoke(a)).longValue();
+            }
+        } catch (Throwable t) {
+            log(ctx, "account lookup failed: " + t);
+        }
+        log(ctx, "resolveFaceFileId vid=" + vid + " corpId=" + corpId);
+
+        // local cache first - avoids a network round trip when the app already has it
+        try {
+            Method cache = svc.getClass().getMethod("getCacheUserFaceInfo", long.class);
+            Object info = cache.invoke(svc, Long.valueOf(vid));
+            if (info != null) {
+                Object url = get(info, "faceUrl");
+                if (url instanceof byte[]) {
+                    String s = new String((byte[]) url, UTF8);
+                    if (s.length() > 0) {
+                        sFaceFileId = s;
+                        log(ctx, "face file id from cache: " + s);
+                        then.onReady(s);
+                        return;
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            log(ctx, "getCacheUserFaceInfo failed: " + t);
+        }
+
+        if (vid == 0L) {
+            then.onReady(null);
+            return;
+        }
+        try {
+            final Class<?> strcb = Class.forName(STRCB, true, cl);
+            Object cb = proxy(cl, strcb, new InvocationHandler() {
+                @Override
+                public Object invoke(Object p, Method m, Object[] a) {
+                    if (!"onResult".equals(m.getName()) || a == null || a.length < 2) {
+                        return def(m);
+                    }
+                    int code = a[0] instanceof Number ? ((Number) a[0]).intValue() : -1;
+                    String str = a[1] instanceof String ? (String) a[1] : null;
+                    log(ctx, "getUserFace code=" + code + " str=" + str);
+                    String fileId = parseFaceFileId(str);
+                    if (fileId != null) {
+                        sFaceFileId = fileId;
+                    }
+                    then.onReady(fileId);
+                    return null;
+                }
+            });
+            Method m = svc.getClass().getMethod("getUserFace",
+                    long[].class, long.class, boolean.class, strcb);
+            m.invoke(svc, new long[]{vid}, Long.valueOf(corpId), Boolean.TRUE, cb);
+        } catch (Throwable t) {
+            log(ctx, "getUserFace failed: " + t);
+            then.onReady(null);
+        }
+    }
+
+    /** Parse {@code "vid:fileid,vid:fileid"} and return the first non-empty fileid. */
+    private static String parseFaceFileId(String s) {
+        if (s == null) return null;
+        String[] parts = s.split(",");
+        for (String part : parts) {
+            String p = part == null ? "" : part.trim();
+            int i = p.indexOf(':');
+            if (i < 0 || i + 1 >= p.length()) continue;
+            String fileId = p.substring(i + 1).trim();
+            if (fileId.length() > 0) return fileId;
+        }
+        return null;
+    }
+
+    private interface FaceReady {
+        void onReady(String fileId);
+    }
+
     // ----------------------------------------------------------------- photo
 
     /** ITakePhotoCallback: answer the native "give me a photo" request. */
@@ -358,13 +494,34 @@ public final class PunchDirect {
                     return def(m);
                 }
                 final Object promise = a[0];
-                boolean need = a[1] instanceof Boolean && (Boolean) a[1];
-                int type = a[2] instanceof Number ? ((Number) a[2]).intValue() : 0;
+                final boolean need = a[1] instanceof Boolean && (Boolean) a[1];
+                final int type = a[2] instanceof Number ? ((Number) a[2]).intValue() : 0;
                 log(ctx, "onTakePhotoEvent need=" + need + " type=" + type
                         + " promise=" + (promise != null));
                 if (promise == null || !need) return null;
                 if (type != 0) {
-                    log(ctx, "face punch requested, no face file id available");
+                    // face verification: answer with the account's registered face file id
+                    MAIN.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            resolveFaceFileId(ctx, svc, cl, new FaceReady() {
+                                @Override
+                                public void onReady(String fileId) {
+                                    try {
+                                        if (fileId != null && fileId.length() > 0) {
+                                            resolve(promise, true, fileId);
+                                            log(ctx, "face punch resolved with file id: " + fileId);
+                                        } else {
+                                            resolve(promise, false, "");
+                                            log(ctx, "face punch failed: no face file id");
+                                        }
+                                    } catch (Throwable t) {
+                                        log(ctx, "face resolve failed: " + t);
+                                    }
+                                }
+                            });
+                        }
+                    });
                     return null;
                 }
                 if (photoPath == null || photoPath.length() == 0) {

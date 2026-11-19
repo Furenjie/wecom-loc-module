@@ -50,6 +50,8 @@ public class Module implements IXposedHookLoadPackage {
     private static volatile boolean photoEnabled;
     private static volatile int photoCount;
     private static volatile int photoIdx;
+    /** face file id captured from a real face check-in, reused for headless punches */
+    private static volatile String faceFileId;
 
     private static ClassLoader sCl;
     private static Context sCtx;
@@ -142,6 +144,30 @@ public class Module implements IXposedHookLoadPackage {
             } catch (Throwable t) {
                 XposedBridge.log(TAG + ": yf4.j hook skipped: " + t);
             }
+        try {
+            Class<?> frag = XposedHelpers.findClass(
+                    "com.tencent.wework.enterprise.attendance.controller.AttendanceFragment", sCl);
+            for (String mn : new String[]{"D6", "C6"}) {
+                try {
+                    XposedHelpers.findAndHookMethod(frag, mn, String.class, new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            Object a0 = param.args[0];
+                            if (a0 instanceof String && ((String) a0).length() > 0) {
+                                faceFileId = (String) a0;
+                                if (sCtx != null) saveConfig(sCtx);
+                                XposedBridge.log(TAG + ": captured faceFileId");
+                            }
+                        }
+                    });
+                } catch (Throwable ignored) {
+                }
+            }
+            XposedBridge.log(TAG + ": hooked faceFileId capture");
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + ": faceFileId hook skipped: " + t);
+        }
+
         try {
             Class<?> promiseCls = XposedHelpers.findClass(
                     "com.tencent.wework.foundation.model.AttendanceTakePhotoPromise", sCl);
@@ -312,6 +338,13 @@ public class Module implements IXposedHookLoadPackage {
         final String pname = b.getString("name", poiName);
         final String paddr = b.getString("addr", address);
         final String photo = b.getString("photo", null);
+        if (faceFileId != null && faceFileId.length() > 0) {
+            PunchDirect.seedFaceFileId(faceFileId);
+        }
+        if (getBool(b, "dry", false) || getBool(b, "probe", false)) {
+            PunchDirect.probeFace(sCtx, sCl);
+            return;
+        }
         if (photo != null && photo.length() > 0) {
             PunchDirect.submit(sCtx, outside, plat, plng, pname, paddr, photo, sCl);
         } else {
@@ -358,6 +391,7 @@ public class Module implements IXposedHookLoadPackage {
                 else if ("photo_enabled".equals(k)) photoEnabled = "1".equals(v);
                 else if ("photo_count".equals(k)) photoCount = parseIntSafe(v);
                 else if ("photo_idx".equals(k)) photoIdx = parseIntSafe(v);
+                else if ("face_file_id".equals(k) && v.length() > 0) faceFileId = v;
             }
         } catch (Throwable t) {
             XposedBridge.log(TAG + ": loadConfig failed: " + t);
@@ -378,7 +412,8 @@ public class Module implements IXposedHookLoadPackage {
                     + "addr=" + address + "\n"
                     + "photo_enabled=" + (photoEnabled ? "1" : "0") + "\n"
                     + "photo_count=" + photoCount + "\n"
-                    + "photo_idx=" + photoIdx + "\n";
+                    + "photo_idx=" + photoIdx + "\n"
+                    + "face_file_id=" + (faceFileId == null ? "" : faceFileId) + "\n";
             out.write(s.getBytes(StandardCharsets.UTF_8));
             out.flush();
         } catch (Throwable t) {

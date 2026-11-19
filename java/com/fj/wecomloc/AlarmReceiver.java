@@ -1,5 +1,7 @@
 package com.fj.wecomloc;
 
+import android.app.AlarmManager;
+import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -19,31 +21,78 @@ public class AlarmReceiver extends BroadcastReceiver {
     private static final String ACTION_PUNCH_DIRECT = "com.fj.wecomloc.PUNCH_DIRECT";
     private static final String ACTION_RESULT = "com.fj.wecomloc.PUNCH_RESULT";
 
+    /** Test hook: schedule a direct punch {@code delay} seconds from now. */
+    static final String ACTION_TEST_SCHEDULE = "com.fj.wecomloc.SCHEDULE_TEST";
+
     @Override
     public void onReceive(Context context, Intent intent) {
-        if (intent == null || !PunchScheduler.ACTION_PUNCH.equals(intent.getAction())) return;
-        final String type = intent.getStringExtra("type");
+        if (intent == null) return;
         final Context app = context.getApplicationContext();
+        final String action = intent.getAction();
+
+        if (ACTION_TEST_SCHEDULE.equals(action)) {
+            final int delay = intent.getIntExtra("delay", 60);
+            final boolean outside = intent.getBooleanExtra("outside", true);
+            final boolean dry = intent.getBooleanExtra("dry", false);
+            AlarmManager am = (AlarmManager) app.getSystemService(Context.ALARM_SERVICE);
+            Intent i = new Intent(app, AlarmReceiver.class);
+            i.setAction(PunchScheduler.ACTION_PUNCH);
+            i.putExtra("type", "test:" + (outside ? "out" : "in"));
+            i.putExtra("dry", dry);
+            PendingIntent pi = PendingIntent.getBroadcast(app, 9100, i,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            long at = System.currentTimeMillis() + Math.max(5, delay) * 1000L;
+            am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi);
+            result(app, "测试定时已排定: " + Math.max(5, delay) + " 秒后触发"
+                    + (dry ? "（dry：只验证链路不提交）" : ""));
+            return;
+        }
+
+        if (!PunchScheduler.ACTION_PUNCH.equals(action)) return;
+        final String type = intent.getStringExtra("type");
+        final boolean dry = intent.getBooleanExtra("dry", false);
+        // morning/evening are 上下班打卡 (binary); "outside" and manual/test are 外出打卡.
+        final boolean forcedOutside = "test:out".equals(type) ? true
+                : "test:in".equals(type) ? false
+                : !("morning".equals(type) || "evening".equals(type));
+        final boolean wantPhoto = "outside".equals(type) || (type != null && type.startsWith("test:out"));
 
         final PendingResult result = goAsync();
         new Thread(new Runnable() {
             @Override
             public void run() {
                 try {
+                    ensureWeCom(app);
                     applyLocation(app);
                     String photo = null;
-                    if (PunchStore.photoEnabled(app)) {
+                    if (wantPhoto && PunchStore.photoEnabled(app)) {
                         RootConfig.pushPhotos(app);
                         photo = nextPhotoPath(app);
                     }
-                    sendDirect(app, type, photo);
-                    PunchScheduler.scheduleNext(app, type);
+                    sendDirect(app, type, photo, forcedOutside, dry);
+                    if (type == null || !type.startsWith("test:")) {
+                        PunchScheduler.scheduleNext(app, type);
+                    }
                 } catch (Throwable ignored) {
                 } finally {
                     result.finish();
                 }
             }
         }, "fj-punch").start();
+    }
+
+    /**
+     * The injected module only exists inside a live WeCom process; after a
+     * reboot or a long idle period the app may be gone, so the direct-punch
+     * broadcast would be dropped. Pull it up first when needed.
+     */
+    private static void ensureWeCom(Context app) {
+        try {
+            if (RootConfig.run("pidof com.tencent.wework > /dev/null 2>&1", 8) == 0) return;
+            RootConfig.run("am start -n com.tencent.wework/com.tencent.wework.launch.WwMainActivity", 15);
+            Thread.sleep(9000L);
+        } catch (Throwable ignored) {
+        }
     }
 
     /** Send the saved mock location to WeCom via the same broadcast the UI uses. */
@@ -67,17 +116,14 @@ public class AlarmReceiver extends BroadcastReceiver {
         }
     }
 
-    /**
-     * Ask WeCom's injected module to perform the check-in. "morning"/"evening"
-     * map to 上下班打卡; anything else maps to 外出打卡.
-     */
-    private static void sendDirect(Context app, String type, String photoPath) {
+    /** Ask WeCom's injected module to perform the check-in. */
+    private static void sendDirect(Context app, String type, String photoPath,
+                                   boolean outside, boolean dry) {
         SharedPreferences sp = app.getSharedPreferences("ui", Context.MODE_PRIVATE);
         double lat = parseD(sp.getString("lat", "39.908722"), 39.908722d);
         double lng = parseD(sp.getString("lng", "116.397499"), 116.397499d);
         String name = sp.getString("name", "");
         String addr = sp.getString("addr", "");
-        boolean outside = sp.getBoolean("outside", true);
         Intent i = new Intent(ACTION_PUNCH_DIRECT);
         i.setPackage("com.tencent.wework");
         i.putExtra("outside", outside);
@@ -86,11 +132,30 @@ public class AlarmReceiver extends BroadcastReceiver {
         i.putExtra("name", name);
         i.putExtra("addr", addr);
         i.putExtra("type", type == null ? "" : type);
+        if (dry) i.putExtra("dry", true);
         if (photoPath != null && photoPath.length() > 0) {
             i.putExtra("photo", photoPath);
         }
         try {
             app.sendBroadcast(i);
+            result(app, "直投广播已发出: type=" + type + " outside=" + outside
+                    + (photoPath == null ? "" : " photo=" + photoPath));
+        } catch (Throwable t) {
+            result(app, "直投广播失败: " + t);
+        }
+    }
+
+    private static boolean isOutside(Context app) {
+        return PunchStore.outsideEnabled(app);
+    }
+
+    private static void result(Context app, String msg) {
+        try {
+            Intent r = new Intent("com.fj.wecomloc.PUNCH_RESULT");
+            r.setPackage("com.fj.wecomloc");
+            r.putExtra("msg", msg);
+            r.putExtra("ts", System.currentTimeMillis());
+            app.sendBroadcast(r);
         } catch (Throwable ignored) {
         }
     }
