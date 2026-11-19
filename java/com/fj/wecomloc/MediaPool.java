@@ -75,7 +75,14 @@ final class MediaPool {
             ContentValues done = new ContentValues();
             done.put(MediaStore.MediaColumns.IS_PENDING, 0);
             cr.update(uri, done, null, null);
-            return new File(dir(subDir), displayName).getAbsolutePath();
+
+            // MediaStore silently renames on collision ("face_0 (1).jpg"), so the
+            // path has to be read back from the row instead of rebuilt by hand.
+            String real = nameOf(c, uri);
+            if (real == null) {
+                real = displayName;
+            }
+            return new File(dir(subDir), real).getAbsolutePath();
         } catch (Throwable t) {
             w("media insert failed: " + subDir + "/" + displayName + ": " + t);
             if (uri != null) {
@@ -95,6 +102,28 @@ final class MediaPool {
         }
     }
 
+    /** Reads DISPLAY_NAME back for a freshly inserted row. */
+    private static String nameOf(Context c, Uri uri) {
+        Cursor cu = null;
+        try {
+            cu = c.getContentResolver().query(uri,
+                    new String[]{MediaStore.MediaColumns.DISPLAY_NAME}, null, null, null);
+            if (cu != null && cu.moveToFirst()) {
+                return cu.getString(0);
+            }
+        } catch (Throwable t) {
+            w("name lookup failed: " + t);
+        } finally {
+            if (cu != null) {
+                try {
+                    cu.close();
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+        return null;
+    }
+
     /**
      * Lists {@code prefix*.jpg} in the pool.
      *
@@ -111,7 +140,7 @@ final class MediaPool {
         if (fs != null) {
             for (File f : fs) {
                 if (matches(f.getName(), prefix)) {
-                    paths.add(f.getAbsolutePath());
+                    paths.add(canonical(f));
                 }
             }
         }
@@ -137,7 +166,7 @@ final class MediaPool {
                     }
                     File f = new File(new File("/sdcard", rel == null ? relPath(subDir) : rel), name);
                     if (f.exists()) {
-                        paths.add(f.getAbsolutePath());
+                        paths.add(canonical(f));
                     }
                 }
             }
@@ -208,6 +237,18 @@ final class MediaPool {
             }
         }
         return n;
+    }
+
+    /**
+     * One path per file across the two sources: File listing yields /sdcard/...,
+     * MediaStore yields /storage/emulated/0/..., and both name the same photo.
+     */
+    private static String canonical(File f) {
+        try {
+            return f.getCanonicalPath();
+        } catch (Throwable t) {
+            return f.getAbsolutePath();
+        }
     }
 
     private static boolean matches(String name, String prefix) {
