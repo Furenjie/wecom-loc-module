@@ -207,7 +207,7 @@ public class AutoPunchActivity extends Activity {
             i.putExtra("dry", true);
             sendBroadcast(i);
             Toast.makeText(this, "已排定 10 秒后触发（dry），等 20 秒看日志", Toast.LENGTH_SHORT).show();
-            mUi.postDelayed(() -> mLog.setText(readLog()), 20000);
+            mUi.postDelayed(this::requestLog, 20000);
         });
         root.addView(sched);
 
@@ -230,10 +230,11 @@ public class AutoPunchActivity extends Activity {
         mLog.setTextSize(11);
         mLog.setText(readLog());
         root.addView(mLog);
+        requestLog();
 
         Button refresh = new Button(this);
         refresh.setText("刷新日志");
-        refresh.setOnClickListener(v -> mLog.setText(readLog()));
+        refresh.setOnClickListener(v -> requestLog());
         root.addView(refresh);
 
         Button clearLog = new Button(this);
@@ -252,6 +253,12 @@ public class AutoPunchActivity extends Activity {
             @Override
             public void onReceive(Context context, Intent intent) {
                 if (intent == null || !ACTION_RESULT.equals(intent.getAction())) return;
+                String log = intent.getStringExtra("log");
+                if (log != null) {
+                    cacheLog(log);
+                    mLog.setText(readLog());
+                    return;
+                }
                 String msg = intent.getStringExtra("msg");
                 Toast.makeText(AutoPunchActivity.this,
                         msg == null ? "" : msg, Toast.LENGTH_SHORT).show();
@@ -283,8 +290,8 @@ public class AutoPunchActivity extends Activity {
     private void testPunch() {
         sendDirect("manual");
         Toast.makeText(this, "已下发直投打卡，看下方日志", Toast.LENGTH_SHORT).show();
-        mUi.postDelayed(() -> mLog.setText(readLog()), 2500);
-        mUi.postDelayed(() -> mLog.setText(readLog()), 6000);
+        mUi.postDelayed(this::requestLog, 2500);
+        mUi.postDelayed(this::requestLog, 6000);
     }
 
     private void sendDirect(String type) {
@@ -356,8 +363,38 @@ public class AutoPunchActivity extends Activity {
 
     // ------------------------------------------------------------------- log
 
+    /**
+     * The direct-punch log lives in WeCom's private dir, so this app cannot read
+     * it. Ask the injected module (running inside WeCom) to broadcast the tail.
+     */
+    private void requestLog() {
+        Intent i = new Intent(ACTION_PUNCH_DIRECT);
+        i.setPackage("com.tencent.wework");
+        i.putExtra("logreq", true);
+        try {
+            sendBroadcast(i);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** Stores the log tail broadcast by the WeCom-side module for display. */
+    private void cacheLog(String text) {
+        FileOutputStream out = null;
+        try {
+            out = new FileOutputStream(logFile(), false);
+            out.write(text.getBytes(StandardCharsets.UTF_8));
+            out.flush();
+        } catch (Throwable ignored) {
+        } finally {
+            if (out != null) try {
+                out.close();
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
     private File logFile() {
-        return new File("/data/data/com.tencent.wework/files/fj_punch_direct.log");
+        return new File(getFilesDir(), "fj_punch_direct.log");
     }
 
     private String readLog() {
@@ -480,12 +517,27 @@ public class AutoPunchActivity extends Activity {
         boolean face = requestCode == REQ_FACES;
         String subDir = face ? MediaPool.DIR_FACE : MediaPool.DIR_PHOTO;
         String prefix = face ? "face_" : "photo_";
-        MediaPool.clear(this, subDir, prefix);
 
-        int n = 0;
+        if (uris.isEmpty()) {
+            Toast.makeText(this, "没有选中任何图片", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        // Decode everything first: an empty/failed selection must never wipe the
+        // existing pool (that is how the 22 photos disappeared once).
+        ArrayList<Bitmap> decoded = new ArrayList<>();
         for (Uri u : uris) {
             Bitmap bm = loadScaled(u);
-            if (bm == null) continue;
+            if (bm != null) decoded.add(bm);
+        }
+        if (decoded.isEmpty()) {
+            Toast.makeText(this, "图片解码失败，未做任何修改", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        MediaPool.clear(this, subDir, prefix);
+        int n = 0;
+        for (Bitmap bm : decoded) {
             if (MediaPool.insert(this, bm, subDir, prefix + n + ".jpg") != null) n++;
             bm.recycle();
         }

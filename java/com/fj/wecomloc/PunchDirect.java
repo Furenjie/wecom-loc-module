@@ -799,6 +799,57 @@ public final class PunchDirect {
         }
     }
 
+    /** Broadcasts the tail of the on-device log back to the module app.
+     *  The module app cannot read this file itself (it lives in WeCom's
+     *  private dir), so we read it here - inside the WeCom process - and
+     *  send the text over. */
+    public static void sendLogTail(Context ctx) {
+        String tail = tail(ctx, 8000);
+        try {
+            Intent i = new Intent(ACTION_RESULT);
+            i.setPackage("com.fj.wecomloc");
+            i.putExtra("msg", "(log tail)");
+            i.putExtra("log", tail);
+            i.putExtra("ts", System.currentTimeMillis());
+            ctx.sendBroadcast(i);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static String tail(Context ctx, int max) {
+        FileInputStream in = null;
+        try {
+            File f = new File(ctx.getFilesDir(), "fj_punch_direct.log");
+            if (!f.exists()) return "(log file missing: " + f.getAbsolutePath() + ")";
+            long len = f.length();
+            long skip = Math.max(0, len - max);
+            in = new FileInputStream(f);
+            if (skip > 0) {
+                long s = 0;
+                while (s < skip) {
+                    long n = in.skip(skip - s);
+                    if (n <= 0) break;
+                    s += n;
+                }
+            }
+            byte[] buf = new byte[(int) Math.min(max, len)];
+            int off = 0;
+            while (off < buf.length) {
+                int n = in.read(buf, off, buf.length - off);
+                if (n <= 0) break;
+                off += n;
+            }
+            String s = new String(buf, 0, off, UTF8);
+            return s.length() > max ? s.substring(s.length() - max) : s;
+        } catch (Throwable t) {
+            return "(log read failed: " + t + ")";
+        } finally {
+            if (in != null) try {
+                in.close();
+            } catch (Throwable ignored) {
+            }
+        }
+    }
     private static void append(Context ctx, String msg) {
         FileOutputStream out = null;
         try {

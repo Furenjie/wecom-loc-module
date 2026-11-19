@@ -345,6 +345,12 @@ public class Module implements IXposedHookLoadPackage {
         if (facePhoto != null && facePhoto.length() > 0) {
             PunchDirect.seedFacePhoto(facePhoto);
         }
+        if (getBool(b, "logreq", false)) {
+            // The module app cannot read WeCom's private files; it asks us
+            // for the log tail and we broadcast it back.
+            PunchDirect.sendLogTail(sCtx);
+            return;
+        }
         if (getBool(b, "dry", false) || getBool(b, "probe", false)) {
             PunchDirect.probeFace(sCtx, sCl);
             return;

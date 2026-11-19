@@ -41,7 +41,7 @@ $linkArgs = @('link', '-o', (Join-Path $build 'base.apk'),
     '-I', $platform,
     '--manifest', (Join-Path $root 'AndroidManifest.xml'),
     '--min-sdk-version', '24', '--target-sdk-version', '35',
-    '--auto-add-overlay', '--version-code', '14', '--version-name', '1.13')
+    '--auto-add-overlay', '--version-code', '15', '--version-name', '1.14')
 if (Test-Path $resZip) { $linkArgs += @('-R', $resZip) }
 & (Join-Path $bt 'aapt2.exe') @linkArgs 2>&1 | Out-Host
 
