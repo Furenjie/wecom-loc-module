@@ -64,12 +64,19 @@ public class AlarmReceiver extends BroadcastReceiver {
                 try {
                     ensureWeCom(app);
                     applyLocation(app);
+                    // Hand over the *source* paths only. The copy into WeCom's
+                    // private dir must happen inside the WeCom process (see
+                    // PunchDirect.stageImage), otherwise the file ends up owned
+                    // by another uid and the server answers 901.
                     String photo = null;
                     if (wantPhoto && PunchStore.photoEnabled(app)) {
-                        RootConfig.pushPhotos(app);
-                        photo = nextPhotoPath(app);
+                        photo = pickNext(app, PunchStore.photos(app), "photo_rotate");
                     }
-                    sendDirect(app, type, photo, forcedOutside, dry);
+                    String face = null;
+                    if (wantPhoto && PunchStore.faceEnabled(app)) {
+                        face = pickNext(app, PunchStore.faces(app), "face_rotate");
+                    }
+                    sendDirect(app, type, photo, face, forcedOutside, dry);
                     if (type == null || !type.startsWith("test:")) {
                         PunchScheduler.scheduleNext(app, type);
                     }
@@ -118,7 +125,7 @@ public class AlarmReceiver extends BroadcastReceiver {
 
     /** Ask WeCom's injected module to perform the check-in. */
     private static void sendDirect(Context app, String type, String photoPath,
-                                   boolean outside, boolean dry) {
+                                   String facePath, boolean outside, boolean dry) {
         SharedPreferences sp = app.getSharedPreferences("ui", Context.MODE_PRIVATE);
         double lat = parseD(sp.getString("lat", "39.908722"), 39.908722d);
         double lng = parseD(sp.getString("lng", "116.397499"), 116.397499d);
@@ -136,10 +143,14 @@ public class AlarmReceiver extends BroadcastReceiver {
         if (photoPath != null && photoPath.length() > 0) {
             i.putExtra("photo", photoPath);
         }
+        if (facePath != null && facePath.length() > 0) {
+            i.putExtra("facephoto", facePath);
+        }
         try {
             app.sendBroadcast(i);
             result(app, "直投广播已发出: type=" + type + " outside=" + outside
-                    + (photoPath == null ? "" : " photo=" + photoPath));
+                    + (photoPath == null ? "" : " photo=" + photoPath)
+                    + (facePath == null ? "" : " face=" + facePath));
         } catch (Throwable t) {
             result(app, "直投广播失败: " + t);
         }
@@ -160,16 +171,14 @@ public class AlarmReceiver extends BroadcastReceiver {
         }
     }
 
-    /** Pick the next photo in the staged WeCom dir and advance the rotation index. */
-    private static String nextPhotoPath(Context app) {
-        File dir = PunchStore.photoDir(app);
-        File[] fs = PunchStore.photos(app);
-        if (fs.length == 0) return null;
+    /** Advance a rotation cursor and pick one of the local (source) paths. */
+    private static String pickNext(Context app, java.io.File[] files, String cursorKey) {
+        if (files == null || files.length == 0) return null;
         SharedPreferences sp = app.getSharedPreferences("punch", Context.MODE_PRIVATE);
-        int idx = sp.getInt("photo_rotate", 0);
-        File pick = fs[Math.abs(idx) % fs.length];
-        sp.edit().putInt("photo_rotate", idx + 1).apply();
-        return "/data/user/0/com.tencent.wework/files/fj_photos/" + pick.getName();
+        int idx = sp.getInt(cursorKey, 0);
+        String pick = files[Math.abs(idx) % files.length].getAbsolutePath();
+        sp.edit().putInt(cursorKey, idx + 1).apply();
+        return pick;
     }
 
     private static double parseD(String s, double def) {

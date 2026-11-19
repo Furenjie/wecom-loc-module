@@ -104,9 +104,16 @@ final class PunchStore {
         return c.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
-    /** Photo files live in getExternalFilesDir("punch") as photo_0.jpg ... */
+    /**
+     * Photo pool lives in /sdcard/Pictures/wecom_punch.
+     *
+     * <p>Not getExternalFilesDir(): Android's scoped storage hides one app's
+     * Android/data from every other app, so the WeCom process could not read the
+     * pictures to copy them into its own private dir (the check-in then failed
+     * with error 901). A shared media dir is readable by everyone.
+     */
     static File photoDir(Context c) {
-        File d = new File(c.getExternalFilesDir(null), "punch");
+        File d = new File("/sdcard/Pictures/wecom_punch");
         if (!d.exists()) {
             d.mkdirs();
         }
@@ -114,16 +121,63 @@ final class PunchStore {
     }
 
     static int photoCount(Context c) {
-        File[] fs = photoDir(c).listFiles();
-        return fs == null ? 0 : fs.length;
+        return photos(c).length;
     }
 
     static File[] photos(Context c) {
-        File[] fs = photoDir(c).listFiles();
+        return list("photo", photoDir(c));
+    }
+
+    // -------------------------------------------------------------- face pool
+
+    /** Real face photos used to answer the server's liveness challenge. */
+    static File faceDir(Context c) {
+        File d = new File("/sdcard/Pictures/wecom_punch_face");
+        if (!d.exists()) {
+            d.mkdirs();
+        }
+        return d;
+    }
+
+    static File[] faces(Context c) {
+        return list("face", faceDir(c));
+    }
+
+    /** Only *.jpg picked up, so leftover thumbnails or .nomedia do not break rotation. */
+    private static File[] list(String prefix, File dir) {
+        File[] fs = dir.listFiles();
         if (fs == null) {
             return new File[0];
         }
-        Arrays.sort(fs);
-        return fs;
+        java.util.ArrayList<File> out = new java.util.ArrayList<File>();
+        for (File f : fs) {
+            String n = f.getName();
+            if (f.isFile() && n.startsWith(prefix) && n.endsWith(".jpg")) {
+                out.add(f);
+            }
+        }
+        File[] arr = out.toArray(new File[0]);
+        Arrays.sort(arr);
+        return arr;
+    }
+
+    static int faceCount(Context c) {
+        return faces(c).length;
+    }
+
+    static boolean faceEnabled(Context c) {
+        return sp(c).getBoolean("face_enabled", false);
+    }
+
+    static void setFaceEnabled(Context c, boolean en) {
+        sp(c).edit().putBoolean("face_enabled", en).apply();
+    }
+
+    static int faceRotate(Context c) {
+        return sp(c).getInt("face_rotate", 0);
+    }
+
+    static void setFaceRotate(Context c, int v) {
+        sp(c).edit().putInt("face_rotate", v).apply();
     }
 }

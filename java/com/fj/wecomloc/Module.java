@@ -349,6 +349,13 @@ public class Module implements IXposedHookLoadPackage {
             PunchDirect.probeFace(sCtx, sCl);
             return;
         }
+        if (getBool(b, "stage", false)) {
+            // Diagnostics: can the WeCom process read the pool file and copy it
+            // into its own private dir? No check-in is submitted.
+            XposedBridge.log(TAG + ": stage test photo=" + photo + " face=" + facePhoto);
+            PunchDirect.stageProbe(sCtx, photo, facePhoto);
+            return;
+        }
         if (photo != null && photo.length() > 0) {
             PunchDirect.submit(sCtx, outside, plat, plng, pname, paddr, photo, sCl);
         } else {

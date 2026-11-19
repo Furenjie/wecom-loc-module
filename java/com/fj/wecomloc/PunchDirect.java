@@ -6,6 +6,7 @@ import android.os.Handler;
 import android.os.Looper;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationHandler;
@@ -232,6 +233,11 @@ public final class PunchDirect {
                                      final ClassLoader cl, double lat, double lng,
                                      String poi, String addr, String photoPath)
             throws Exception {
+        // WeCom refuses images outside its own files dir (server answers 901),
+        // so stage the picture into our private dir with our own uid first.
+        if (photoPath != null && photoPath.length() > 0) {
+            photoPath = stageImage(ctx, photoPath, "fj_photos", "photo_0.jpg");
+        }
         Object location = buildLocation(cl, lat, lng, poi, addr);
         Object data = buildRandomData(cl, location, photoPath, true);
         Class<?> cb3 = Class.forName(CB3, true, cl);
@@ -366,6 +372,94 @@ public final class PunchDirect {
     /** Path of a real face photo to upload when the server asks for a live face. */
     public static void seedFacePhoto(String path) {
         if (path != null && path.length() > 0) sFacePhoto = path;
+    }
+
+    /**
+     * WeCom only accepts check-in images that live inside its own private files
+     * dir, and the copy has to be done with WeCom's own uid (a root copy leaves
+     * files owned by root, which the app cannot open and the server answers 901).
+     *
+     * <p>We are injected into the WeCom process, so a plain in-process copy is
+     * exactly what the app itself would do. Returns the staged path, or the
+     * original path when it already points inside our private dir.
+     */
+    public static String stageImage(Context ctx, String srcPath, String subDir, String name) {
+        if (srcPath == null || srcPath.length() == 0) return srcPath;
+        File src = new File(srcPath);
+        try {
+            File dir = new File(ctx.getFilesDir(), subDir);
+            if (!dir.exists() && !dir.mkdirs()) {
+                log(ctx, "stage: cannot create " + dir);
+                return srcPath;
+            }
+            File dst = new File(dir, name);
+            if (src.getAbsolutePath().equals(dst.getAbsolutePath()) && src.exists()) {
+                return dst.getAbsolutePath();
+            }
+            if (!src.exists() || !src.canRead()) {
+                // Android's scoped storage hides other apps' external dirs, so the
+                // pool file may be unreadable from inside WeCom. Fall back to a
+                // same-named file that was pre-staged into our private dir.
+                File alt = new File(dir, src.getName());
+                if (alt.exists() && alt.canRead()) {
+                    return alt.getAbsolutePath();
+                }
+                if (dst.exists() && dst.canRead()) {
+                    return dst.getAbsolutePath();
+                }
+                log(ctx, "stage: source unreadable " + srcPath);
+                return srcPath;
+            }
+            copyFile(src, dst);
+            //noinspection ResultOfMethodCallIgnored
+            dst.setReadable(true, false);
+            log(ctx, "stage: " + srcPath + " -> " + dst.getAbsolutePath()
+                    + " (" + dst.length() + " bytes)");
+            return dst.getAbsolutePath();
+        } catch (Throwable t) {
+            log(ctx, "stage failed: " + t);
+            return srcPath;
+        }
+    }
+
+    /** Diagnostic: verify the in-process copy works, without submitting anything. */
+    public static void stageProbe(Context ctx, String photo, String face) {
+        try {
+            String a = stageImage(ctx, photo, "fj_photos", "photo_0.jpg");
+            File fa = new File(a == null ? "" : a);
+            report(ctx, "stage probe photo: src=" + photo + " -> " + a
+                    + " exists=" + fa.exists() + " len=" + fa.length()
+                    + " canRead=" + fa.canRead());
+            String b2 = stageImage(ctx, face, "fj_faces", "face_0.jpg");
+            File fb = new File(b2 == null ? "" : b2);
+            report(ctx, "stage probe face: src=" + face + " -> " + b2
+                    + " exists=" + fb.exists() + " len=" + fb.length()
+                    + " canRead=" + fb.canRead());
+        } catch (Throwable t) {
+            report(ctx, "stage probe failed: " + t);
+        }
+    }
+
+    private static void copyFile(File src, File dst) throws Exception {
+        FileInputStream in = new FileInputStream(src);
+        FileOutputStream out = new FileOutputStream(dst);
+        try {
+            byte[] buf = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                out.write(buf, 0, n);
+            }
+            out.flush();
+        } finally {
+            try {
+                in.close();
+            } catch (Throwable ignored) {
+            }
+            try {
+                out.close();
+            } catch (Throwable ignored) {
+            }
+        }
     }
 
     /** Diagnostic only: resolve the face file id and log it. Does not punch. */
@@ -514,8 +608,9 @@ public final class PunchDirect {
                         MAIN.post(new Runnable() {
                             @Override
                             public void run() {
-                                log(ctx, "face punch: uploading face photo " + facePhoto);
-                                uploadAndResolve(ctx, svc, cl, promise, facePhoto);
+                                String staged = stageImage(ctx, facePhoto, "fj_faces", "face_0.jpg");
+                                log(ctx, "face punch: uploading face photo " + staged);
+                                uploadAndResolve(ctx, svc, cl, promise, staged);
                             }
                         });
                         return null;

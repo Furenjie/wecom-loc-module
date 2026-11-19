@@ -43,6 +43,7 @@ import java.util.ArrayList;
 public class AutoPunchActivity extends Activity {
 
     private static final int REQ_PHOTOS = 2001;
+    private static final int REQ_FACES = 2002;
     private static final int MAX_PHOTOS = 10;
     private static final int LONG_EDGE = 1280;
     private static final int JPEG_Q = 85;
@@ -54,6 +55,7 @@ public class AutoPunchActivity extends Activity {
     private TextView mEveningTime;
     private TextView mOutsideTime;
     private TextView mPhotoInfo;
+    private TextView mFaceInfo;
     private TextView mLog;
     private final Handler mUi = new Handler(Looper.getMainLooper());
     private BroadcastReceiver mResultRx;
@@ -160,6 +162,38 @@ public class AutoPunchActivity extends Activity {
         });
         root.addView(clear);
 
+        // ---- face pool: the server asks for a live face on repeat punches, so
+        // we keep a pool of real selfies and upload one each time.
+        Switch faceSw = new Switch(this);
+        faceSw.setText("人脸照片轮换（活体校验用）");
+        faceSw.setChecked(PunchStore.faceEnabled(this));
+        faceSw.setOnCheckedChangeListener((b, v) -> PunchStore.setFaceEnabled(this, v));
+        root.addView(faceSw);
+
+        mFaceInfo = new TextView(this);
+        updateFaceInfo();
+        root.addView(mFaceInfo);
+
+        Button pickFace = new Button(this);
+        pickFace.setText("选择人脸照片（最多10张，正面本人自拍）");
+        pickFace.setOnClickListener(v -> {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("image/*");
+            i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+            startActivityForResult(i, REQ_FACES);
+        });
+        root.addView(pickFace);
+
+        Button clearFace = new Button(this);
+        clearFace.setText("清空人脸照片");
+        clearFace.setOnClickListener(v -> {
+            File[] old = PunchStore.faces(this);
+            if (old != null) for (File f : old) f.delete();
+            updateFaceInfo();
+        });
+        root.addView(clearFace);
+
         Button test = new Button(this);
         test.setText("立即测试：直投打卡");
         test.setOnClickListener(v -> testPunch());
@@ -249,9 +283,6 @@ public class AutoPunchActivity extends Activity {
     // ---------------------------------------------------------------- actions
 
     private void testPunch() {
-        if (PunchStore.photoEnabled(this)) {
-            RootConfig.pushPhotos(this);
-        }
         sendDirect("manual");
         Toast.makeText(this, "已下发直投打卡，看下方日志", Toast.LENGTH_SHORT).show();
         mUi.postDelayed(() -> mLog.setText(readLog()), 2500);
@@ -278,15 +309,22 @@ public class AutoPunchActivity extends Activity {
         } catch (Throwable ignored) {
         }
 
+        // Pass the *source* path; the injected module copies it into WeCom's
+        // private dir with WeCom's own uid (see PunchDirect.stageImage).
         String photo = null;
-        if (PunchStore.photoEnabled(this)) {
-            File[] fs = PunchStore.photos(this);
-            if (fs.length > 0) {
-                int idx = PunchStore.photoRotate(this);
-                photo = "/data/user/0/com.tencent.wework/files/fj_photos/"
-                        + fs[Math.abs(idx) % fs.length].getName();
-                PunchStore.setPhotoRotate(this, idx + 1);
-            }
+        java.io.File[] photos = PunchStore.photos(this);
+        if (PunchStore.photoEnabled(this) && photos.length > 0) {
+            int idx = PunchStore.photoRotate(this);
+            photo = photos[Math.abs(idx) % photos.length].getAbsolutePath();
+            PunchStore.setPhotoRotate(this, idx + 1);
+        }
+
+        String face = null;
+        java.io.File[] faces = PunchStore.faces(this);
+        if (PunchStore.faceEnabled(this) && faces.length > 0) {
+            int idx = PunchStore.faceRotate(this);
+            face = faces[Math.abs(idx) % faces.length].getAbsolutePath();
+            PunchStore.setFaceRotate(this, idx + 1);
         }
 
         Intent i = new Intent(ACTION_PUNCH_DIRECT);
@@ -299,6 +337,7 @@ public class AutoPunchActivity extends Activity {
         i.putExtra("addr", addr);
         i.putExtra("type", type);
         if (photo != null) i.putExtra("photo", photo);
+        if (face != null) i.putExtra("facephoto", face);
         try {
             sendBroadcast(i);
         } catch (Throwable ignored) {
@@ -411,12 +450,18 @@ public class AutoPunchActivity extends Activity {
         mPhotoInfo.setText("已选照片：" + (fs == null ? 0 : fs.length));
     }
 
+    private void updateFaceInfo() {
+        File[] fs = PunchStore.faces(this);
+        mFaceInfo.setText("已选人脸照片：" + (fs == null ? 0 : fs.length));
+    }
+
     // --------------------------------------------------------------- picking
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != REQ_PHOTOS || resultCode != RESULT_OK || data == null) return;
+        if ((requestCode != REQ_PHOTOS && requestCode != REQ_FACES)
+                || resultCode != RESULT_OK || data == null) return;
 
         ArrayList<Uri> uris = new ArrayList<>();
         if (data.getClipData() != null) {
@@ -428,18 +473,24 @@ public class AutoPunchActivity extends Activity {
             uris.add(data.getData());
         }
 
-        File dir = PunchStore.photoDir(this);
+        boolean face = requestCode == REQ_FACES;
+        File dir = face ? PunchStore.faceDir(this) : PunchStore.photoDir(this);
         dir.mkdirs();
-        File[] old = PunchStore.photos(this);
+        File[] old = face ? PunchStore.faces(this) : PunchStore.photos(this);
         if (old != null) for (File f : old) f.delete();
 
+        String prefix = face ? "face_" : "photo_";
         int n = 0;
         for (Uri u : uris) {
-            File out = new File(dir, "photo_" + n + ".jpg");
+            File out = new File(dir, prefix + n + ".jpg");
             if (saveScaled(u, out)) n++;
         }
         Toast.makeText(this, "已保存 " + n, Toast.LENGTH_SHORT).show();
-        updatePhotoInfo();
+        if (face) {
+            updateFaceInfo();
+        } else {
+            updatePhotoInfo();
+        }
     }
 
     private boolean saveScaled(Uri u, File out) {
