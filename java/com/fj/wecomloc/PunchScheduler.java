@@ -9,7 +9,13 @@ import android.os.Build;
 import java.util.Calendar;
 import java.util.Random;
 
-/** Schedules the next fire time inside each punch window via AlarmManager. */
+/**
+ * Schedules the next fire time inside each punch window via AlarmManager.
+ *
+ * <p>The fired alarm only wakes our own process; it sends the direct-punch
+ * broadcast into WeCom, which performs the submission from inside its own
+ * process without any UI.
+ */
 final class PunchScheduler {
 
     static final String ACTION_PUNCH = "com.fj.wecomloc.PUNCH";

@@ -38,6 +38,7 @@ public class Module implements IXposedHookLoadPackage {
     private static final String PKG = "com.tencent.wework";
     private static final String ACTION_SET = "com.fj.wecomloc.SET";
     private static final String ACTION_ACK = "com.fj.wecomloc.ACK";
+    private static final String ACTION_PUNCH = "com.fj.wecomloc.PUNCH_DIRECT";
     private static final String CONFIG_NAME = "fj_wecom_loc.conf";
     private static final String PREFS = "fj_wecom_loc";
 
@@ -254,7 +255,12 @@ public class Module implements IXposedHookLoadPackage {
         sReceiver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
-                if (intent == null || !ACTION_SET.equals(intent.getAction())) return;
+                if (intent == null) return;
+                if (ACTION_PUNCH.equals(intent.getAction())) {
+                    handlePunch(intent);
+                    return;
+                }
+                if (!ACTION_SET.equals(intent.getAction())) return;
                 Bundle b = intent.getExtras();
                 if (b == null) return;
                 enabled = getBool(b, "enabled", enabled);
@@ -280,6 +286,7 @@ public class Module implements IXposedHookLoadPackage {
             }
         };
         IntentFilter filter = new IntentFilter(ACTION_SET);
+        filter.addAction(ACTION_PUNCH);
         try {
             if (Build.VERSION.SDK_INT >= 33) {
                 ctx.registerReceiver(sReceiver, filter, Context.RECEIVER_EXPORTED);
@@ -292,8 +299,27 @@ public class Module implements IXposedHookLoadPackage {
         }
     }
 
-    private static void sendAck(Context ctx, String token) {
-        try {
+    /**
+     * Direct check-in request: builds the protobuf payload and calls the native
+     * attendance entry point, no UI involved.
+     */
+    private static void handlePunch(Intent intent) {
+        Bundle b = intent.getExtras();
+        if (b == null) b = new Bundle();
+        final boolean outside = getBool(b, "outside", true);
+        final double plat = getNum(b, "lat", lat);
+        final double plng = getNum(b, "lng", lng);
+        final String pname = b.getString("name", poiName);
+        final String paddr = b.getString("addr", address);
+        final String photo = b.getString("photo", null);
+        if (photo != null && photo.length() > 0) {
+            PunchDirect.submit(sCtx, outside, plat, plng, pname, paddr, photo, sCl);
+        } else {
+            PunchDirect.submit(sCtx, outside, plat, plng, pname, paddr, null, sCl);
+        }
+    }
+
+    private static void sendAck(Context ctx, String token) {        try {
             Intent ack = new Intent(ACTION_ACK);
             ack.setPackage("com.fj.wecomloc");
             ack.putExtra("token", token == null ? "" : token);

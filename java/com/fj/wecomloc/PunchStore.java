@@ -50,6 +50,15 @@ final class PunchStore {
         return sp(c).getBoolean("photo_enabled", false);
     }
 
+    /** Rotation cursor for staged punch photos (survives reboots). */
+    static int photoRotate(Context c) {
+        return sp(c).getInt("photo_rotate", 0);
+    }
+
+    static void setPhotoRotate(Context c, int v) {
+        sp(c).edit().putInt("photo_rotate", v).apply();
+    }
+
     static void setMorning(Context c, boolean en, int start, int end) {
         sp(c).edit().putBoolean("morning_enabled", en)
                 .putInt("morning_start", start).putInt("morning_end", end).apply();
