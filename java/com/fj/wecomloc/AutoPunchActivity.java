@@ -211,6 +211,18 @@ public class AutoPunchActivity extends Activity {
         });
         root.addView(sched);
 
+        Button probeIn = new Button(this);
+        probeIn.setText("诊断上下班打卡链路（不提交）");
+        probeIn.setOnClickListener(v -> {
+            Intent i = new Intent(ACTION_PUNCH_DIRECT);
+            i.setPackage("com.tencent.wework");
+            i.putExtra("probein", true);
+            sendBroadcast(i);
+            Toast.makeText(this, "已发出上下班诊断，8 秒后看日志", Toast.LENGTH_SHORT).show();
+            mUi.postDelayed(this::requestLog, 8000);
+        });
+        root.addView(probeIn);
+
         Button openWecom = new Button(this);
         openWecom.setText("打开企业微信");
         openWecom.setOnClickListener(v -> {

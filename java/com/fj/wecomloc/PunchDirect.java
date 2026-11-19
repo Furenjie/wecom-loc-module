@@ -489,6 +489,94 @@ public final class PunchDirect {
         });
     }
 
+    /**
+     * Diagnostic only for the 上下班 (binary) path.
+     *
+     * <p>Binary check-in needs a {@code NextCheckState.localId} from the native
+     * layer before it can be submitted. Resolve it and report, but never call
+     * {@code remoteCheckExceptionBinary_V27} - so this cannot punch a real card.
+     */
+    public static void probeBinary(final Context ctx, final ClassLoader cl) {
+        MAIN.post(new Runnable() {
+            @Override
+            public void run() {
+                Object svc;
+                try {
+                    svc = getService(cl);
+                } catch (Throwable t) {
+                    report(ctx, "上下班链路诊断: 取不到打卡服务(" + root(t) + ")");
+                    return;
+                }
+                if (svc == null) {
+                    report(ctx, "上下班链路诊断: 打卡服务尚未初始化");
+                    return;
+                }
+                try {
+                    Object manage = call(svc, "getManageInfo", new Class<?>[0]);
+                    report(ctx, "上下班链路诊断: 打卡服务已就绪 manageInfo="
+                            + (manage == null ? "null" : "ok"));
+                } catch (Throwable t) {
+                    report(ctx, "上下班链路诊断: getManageInfo 失败(" + root(t) + ")");
+                }
+                try {
+                    probeNextState(ctx, svc, cl, 0);
+                } catch (Throwable t) {
+                    report(ctx, "上下班链路诊断: getNextCheckinState 失败(" + root(t) + ")");
+                }
+            }
+        });
+    }
+
+    private static void probeNextState(final Context ctx, final Object svc,
+                                       final ClassLoader cl, final int hop) throws Exception {
+        if (hop > 5) {
+            report(ctx, "上下班链路诊断: 重试 " + hop + " 次仍无回调");
+            return;
+        }
+        final Class<?> nextCb = Class.forName(NEXT, true, cl);
+        Object pNext = proxy(cl, nextCb, new InvocationHandler() {
+            @Override
+            public Object invoke(Object p, Method m, Object[] a) {
+                if (!"onResult".equals(m.getName()) || a == null || a.length < 3) {
+                    return def(m);
+                }
+                Object wrapper = a[1];
+                int count = 0;
+                long localId = 0L;
+                StringBuilder detail = new StringBuilder();
+                try {
+                    Object listObj = get(wrapper, "nextCheckStateList");
+                    Object arrObj = listObj == null ? null : get(listObj, "list");
+                    if (arrObj instanceof Object[]) {
+                        Object[] arr = (Object[]) arrObj;
+                        count = arr.length;
+                        for (Object ns : arr) {
+                            if (ns == null) continue;
+                            long id = ((Number) get(ns, "localId")).longValue();
+                            int code = ((Number) get(ns, "resultCode")).intValue();
+                            if (detail.length() > 0) detail.append(" | ");
+                            detail.append("localId=").append(id).append(" code=").append(code);
+                            if (id != 0L && localId == 0L) localId = id;
+                        }
+                    }
+                    localId = pickLocalId(wrapper);
+                } catch (Throwable t) {
+                    report(ctx, "上下班链路诊断: 解析 NextCheckState 失败(" + root(t) + ")");
+                    return null;
+                }
+                report(ctx, "上下班链路诊断: states=" + count + " 选中 localId=" + localId
+                        + (detail.length() == 0 ? "" : " [" + detail + "]"));
+                report(ctx, localId == 0L
+                        ? "上下班链路诊断: 结论=拿不到 localId，binary 提交走不通"
+                        : "上下班链路诊断: 结论=可以提交（未提交，仅诊断）");
+                return null;
+            }
+        });
+        Method m = svc.getClass().getMethod("getNextCheckinState", boolean.class, nextCb);
+        m.invoke(svc, Boolean.FALSE, pNext);
+        report(ctx, "上下班链路诊断: getNextCheckinState 已发出 (hop " + hop + ")");
+    }
+
     /** Unwrap reflection wrappers so the log shows the real reason. */
     private static String root(Throwable t) {
         Throwable c = t;

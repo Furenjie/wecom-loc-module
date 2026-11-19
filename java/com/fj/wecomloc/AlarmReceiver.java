@@ -24,6 +24,9 @@ public class AlarmReceiver extends BroadcastReceiver {
     /** Test hook: schedule a direct punch {@code delay} seconds from now. */
     static final String ACTION_TEST_SCHEDULE = "com.fj.wecomloc.SCHEDULE_TEST";
 
+    /** Re-arm every enabled window right away (used after editing prefs / reinstalling). */
+    static final String ACTION_RESCHEDULE = "com.fj.wecomloc.RESCHEDULE";
+
     @Override
     public void onReceive(Context context, Intent intent) {
         if (intent == null) return;
@@ -45,6 +48,14 @@ public class AlarmReceiver extends BroadcastReceiver {
             am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi);
             result(app, "测试定时已排定: " + Math.max(5, delay) + " 秒后触发"
                     + (dry ? "（dry：只验证链路不提交）" : ""));
+            return;
+        }
+
+        if (ACTION_RESCHEDULE.equals(action)) {
+            PunchScheduler.scheduleAll(app);
+            result(app, "已重排: 上班=" + PunchScheduler.fmt(PunchStore.lastScheduled(app, "morning"))
+                    + " 下班=" + PunchScheduler.fmt(PunchStore.lastScheduled(app, "evening"))
+                    + " 外出=" + PunchScheduler.fmt(PunchStore.lastScheduled(app, "outside")));
             return;
         }
 
@@ -72,8 +83,9 @@ public class AlarmReceiver extends BroadcastReceiver {
                     if (wantPhoto && PunchStore.photoEnabled(app)) {
                         photo = pickNext(app, PunchStore.photos(app), "photo_rotate");
                     }
+                    // 上下班打卡也会要人脸，所以 face 对所有类型都准备
                     String face = null;
-                    if (wantPhoto && PunchStore.faceEnabled(app)) {
+                    if (PunchStore.faceEnabled(app)) {
                         face = pickNext(app, PunchStore.faces(app), "face_rotate");
                     }
                     sendDirect(app, type, photo, face, forcedOutside, dry);

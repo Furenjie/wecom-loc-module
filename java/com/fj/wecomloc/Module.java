@@ -360,6 +360,11 @@ public class Module implements IXposedHookLoadPackage {
             PunchDirect.sendLogTail(sCtx);
             return;
         }
+        if (getBool(b, "probein", false)) {
+            // 上下班(binary) 链路诊断：只解析 NextCheckState.localId，绝不提交
+            PunchDirect.probeBinary(sCtx, sCl);
+            return;
+        }
         if (getBool(b, "dry", false) || getBool(b, "probe", false)) {
             PunchDirect.probeFace(sCtx, sCl);
             return;
